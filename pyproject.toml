@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skillfuzz"
+version = "0.1.0"
+description = "Coverage-guided behavioural fuzzing and version-diff attestation for agent skills (MVP)"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = ["pydantic>=2.5", "coverage>=7"]
+
+[project.optional-dependencies]
+llm = ["anthropic>=0.40"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+skillfuzz = "skillfuzz.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["skillfuzz*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["sandbox: needs unshare/strace"]

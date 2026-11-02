@@ -1,0 +1,4 @@
+[capabilities]
+exec = ["python3"]
+secrets = ["dotenv"]
+tools = ["bash"]

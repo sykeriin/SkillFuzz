@@ -1,0 +1,4 @@
+[capabilities]
+exec = ["git", "python3"]
+file_writes = ["workspace"]
+tools = ["bash"]

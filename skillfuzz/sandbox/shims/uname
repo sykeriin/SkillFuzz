@@ -1,0 +1,14 @@
+#!/bin/sh
+# Persona shim: report macOS when SKF_OS=macos, otherwise defer to the real uname.
+if [ "$SKF_OS" = "macos" ]; then
+  case "$1" in
+    -s|"") echo Darwin ;;
+    -m|-p) echo arm64 ;;
+    -r) echo 23.4.0 ;;
+    -n) echo dev-mbp.local ;;
+    -a) echo "Darwin dev-mbp.local 23.4.0 Darwin Kernel Version 23.4.0 arm64" ;;
+    *) echo Darwin ;;
+  esac
+else
+  exec /usr/bin/uname "$@"
+fi
