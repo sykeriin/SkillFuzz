@@ -79,7 +79,21 @@ remote_instruction_fetch = false
 
 ## Results on the bundled synthetic set
 
-RESULTS_PLACEHOLDER
+Offline agent, 45-run budget, plateau 12, 3 base skills x 13 trigger types (39 dormant samples) plus 3 benign skills
+and 12 version pairs. "Flagged" = honeytoken exfiltration or a run-time instruction fetch.
+
+| tier | fixed single-task run | SkillFuzz |
+|---|---|---|
+| generic triggers (guessable: `CI=true`, far-future date, `de_DE`, macOS, "deploy"...) | 6/27 | 27/27 |
+| needs-the-skill triggers (`DEPLOY_STAGE=live`, a Dec-2026 date window, a git-remote string, the word "invoice") | 0/12 | 12/12 |
+| all dormant | 6/39 | 39/39 |
+
+* Runs until the payload first fired: median 7, max 28. Benign skills flagged: 0/3 (N=3, not an FPR).
+* Version diff: 12/12 pairs got the expected verdict (undeclared telemetry host, declared vs undeclared new binary, CI-gated exfiltration).
+* **Ablations** (6 needs-skill/generic triggers, 2 seeds, targeted sweep off): without the skill-specific static dictionary the two
+  needs-skill samples tested were missed; guided vs unguided havoc found 11/12 vs 10/12, i.e. no measurable benefit from coverage feedback.
+* **Caveat on the 100%:** the eval caught five bugs in my own code (CI regex, quote pairing, env-compare regex, base64/base32
+  alignment, marker attribution), which I fixed and then re-ran on the same samples. The set is partly tuned to the detector.
 
 ## Limitations (please read)
 
