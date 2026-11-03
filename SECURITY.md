@@ -27,3 +27,11 @@ Snyk/Koi before publishing anything about them.
 
 ## Reporting a vulnerability in SkillFuzz
 Open a private security advisory on the GitHub repository.
+
+## Running externally-sourced samples
+
+Loading real skill samples (`eval/real/load_clawhub.py clone`/`manifest`/`scan`) is read-only: it clones, reads
+frontmatter, and runs the text-only static scanner. It never executes a downloaded skill. Running a real, unreviewed
+sample through the SkillFuzz sandbox (`skillfuzz run`/`fuzz`) is a separate, deliberate step the operator takes —
+in an environment whose execution policy they control — not something this loader or any automated pipeline should
+do unattended.

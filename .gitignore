@@ -7,3 +7,4 @@ skillfuzz-run/
 skillfuzz-baseline/
 *.pyc
 .venv/
+eval/real/_cache/
