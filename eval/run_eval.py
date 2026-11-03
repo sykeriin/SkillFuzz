@@ -26,6 +26,7 @@ import bait_gen  # noqa: E402
 import dormant_gen  # noqa: E402
 
 from skillfuzz.baselines.single_run import single_run  # noqa: E402
+from skillfuzz.baselines.static_scanner import scan as static_scan  # noqa: E402
 from skillfuzz.fingerprint.diff import diff  # noqa: E402
 from skillfuzz.fingerprint.manifest import Manifest  # noqa: E402
 from skillfuzz.fuzz.engine import FuzzConfig, Fuzzer  # noqa: E402
@@ -45,14 +46,15 @@ def make_cfg(a) -> FuzzConfig:
 
 def eval_sample(skill: Path, out: Path, a, kind: str, trigger: str) -> dict:
     t0 = time.time()
+    static_flagged = static_scan(skill).flagged
     sfp = single_run(skill, out / "single")
     r = Fuzzer(skill, out / "fuzz", make_cfg(a)).fuzz()
     fp = r.fingerprint
     tier = ("benign" if kind == "benign" else "needs_skill" if trigger in dormant_gen.NEEDS_SKILL else "generic")
     return {"sample": skill.name, "kind": kind, "trigger": trigger, "tier": tier,
-            "single_flagged": flagged(sfp), "fuzz_flagged": flagged(fp), "first_taint_run": r.first_taint_run or "",
-            "runs": fp.runs, "coverage": fp.coverage, "sandbox_s": round(r.sandbox_seconds, 1),
-            "wall_s": round(time.time() - t0, 1)}
+            "static_flagged": static_flagged, "single_flagged": flagged(sfp), "fuzz_flagged": flagged(fp),
+            "first_taint_run": r.first_taint_run or "", "runs": fp.runs, "coverage": fp.coverage,
+            "sandbox_s": round(r.sandbox_seconds, 1), "wall_s": round(time.time() - t0, 1)}
 
 
 def eval_pair(pair: dict, out: Path, a) -> dict:
@@ -104,7 +106,8 @@ def main() -> int:
         for f in futs:
             row = f.result()
             rows.append(row)
-            print(f"  {row['sample']:38} single={'FLAG' if row['single_flagged'] else '----'} "
+            print(f"  {row['sample']:38} static={'FLAG' if row['static_flagged'] else '----'} "
+                  f"single={'FLAG' if row['single_flagged'] else '----'} "
                   f"fuzz={'FLAG' if row['fuzz_flagged'] else '----'} first_hit={row['first_taint_run'] or '-':>3} "
                   f"runs={row['runs']:>3} cov={row['coverage']:>3} {row['sandbox_s']}s", flush=True)
 
@@ -117,11 +120,13 @@ def main() -> int:
     dorm = [r for r in rows if r["kind"] == "dormant"]
     ben = [r for r in rows if r["kind"] == "benign"]
     print("\n== Detection (flagged = honeytoken exfiltration or run-time instruction fetch) ==")
-    print(f"{'tier':<14}{'single-task':>16}{'skillfuzz':>16}")
+    print(f"{'tier':<14}{'static scan':>16}{'single-task':>16}{'skillfuzz':>16}")
     for tier in ("generic", "needs_skill"):
         sub = [r for r in dorm if r["tier"] == tier]
-        print(f"{tier:<14}{pct(sum(r['single_flagged'] for r in sub), len(sub)):>16}{pct(sum(r['fuzz_flagged'] for r in sub), len(sub)):>16}")
-    print(f"{'all dormant':<14}{pct(sum(r['single_flagged'] for r in dorm), len(dorm)):>16}{pct(sum(r['fuzz_flagged'] for r in dorm), len(dorm)):>16}")
+        print(f"{tier:<14}{pct(sum(r['static_flagged'] for r in sub), len(sub)):>16}"
+              f"{pct(sum(r['single_flagged'] for r in sub), len(sub)):>16}{pct(sum(r['fuzz_flagged'] for r in sub), len(sub)):>16}")
+    print(f"{'all dormant':<14}{pct(sum(r['static_flagged'] for r in dorm), len(dorm)):>16}"
+          f"{pct(sum(r['single_flagged'] for r in dorm), len(dorm)):>16}{pct(sum(r['fuzz_flagged'] for r in dorm), len(dorm)):>16}")
     missed = [r["sample"] for r in dorm if not r["fuzz_flagged"]]
     print(f"fuzzer misses: {missed or 'none'}")
     hits = [int(r["first_taint_run"]) for r in dorm if r["first_taint_run"] != ""]
@@ -130,7 +135,8 @@ def main() -> int:
         print(f"runs-to-first-trigger (fuzzer): median={hits[len(hits) // 2]} max={hits[-1]}")
     if ben:
         print(f"false positives on benign skills: fuzz {sum(r['fuzz_flagged'] for r in ben)}/{len(ben)}, "
-              f"single {sum(r['single_flagged'] for r in ben)}/{len(ben)}  "
+              f"single {sum(r['single_flagged'] for r in ben)}/{len(ben)}, "
+              f"static {sum(r['static_flagged'] for r in ben)}/{len(ben)}  "
               f"(N={len(ben)} is far too small to state an FPR; this only checks for obvious breakage)")
 
     if not a.skip_bait:

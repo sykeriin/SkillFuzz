@@ -1,0 +1,3 @@
+[capabilities]
+exec = ["git", "python3"]
+tools = ["bash"]

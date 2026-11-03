@@ -1,0 +1,3 @@
+[capabilities]
+exec = ["docker", "python3"]
+tools = ["bash"]

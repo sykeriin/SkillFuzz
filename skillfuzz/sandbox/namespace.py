@@ -50,12 +50,14 @@ class NamespaceSandbox:
 
     def run(self, skill_dir: str | Path, fi: FuzzInput, out_dir: str | Path, agent: dict | None = None,
             timeout: float = 60, run_id: str | None = None, seed: int = 0, extra_spec: dict | None = None,
-            model_fn=None, max_model_calls: int = 30) -> dict:
+            model_fn=None, max_model_calls: int = 30, state_dir: str | Path | None = None) -> dict:
         skill_dir, out_dir = Path(skill_dir).resolve(), Path(out_dir).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
         run_id = (run_id or secrets.token_hex(4)).upper()[:8]
         spec = {"skill_dir": str(skill_dir), "out_dir": str(out_dir), "fuzz_input": fi.model_dump(),
                 "agent": agent or {"name": "offline"}, "timeout": timeout, "install_name": install_name(skill_dir), "run_id": run_id, "seed": seed}
+        if state_dir:
+            spec["state_dir"] = str(Path(state_dir).resolve())
         spec.update(extra_spec or {})
         spec_path = out_dir / "spec.json"
         spec_path.write_text(json.dumps(spec))

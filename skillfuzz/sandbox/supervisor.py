@@ -31,6 +31,7 @@ from skillfuzz.sandbox.sinkhole import Sinkhole, ensure_ca
 
 PKG_DIR = Path(__file__).resolve().parent.parent          # .../skillfuzz
 HOME = "/home/agent"
+PERSIST = (".cache", ".local")
 
 
 def sh(*args: str) -> None:
@@ -152,6 +153,15 @@ def main(spec_path: str) -> int:
     shutil.copytree(skill_dir, skill_dst, ignore=shutil.ignore_patterns(".git", "__pycache__", ".skillfuzz"))
     initial |= {str(p.relative_to(home)) for p in skill_dst.rglob("*") if p.is_file()}
 
+    # Optional cross-run state (for "fires on the Nth invocation" skills): only the skill's own directory, ~/.cache and
+    # ~/.local persist. Credentials never do, so markers from an earlier run cannot leak into this one.
+    state_dir = Path(spec["state_dir"]) if spec.get("state_dir") else None
+    if state_dir and (state_dir / "skill").exists():
+        shutil.copytree(state_dir / "skill", skill_dst, dirs_exist_ok=True)
+        for rel in PERSIST:
+            if (state_dir / rel).exists():
+                shutil.copytree(state_dir / rel, home / rel, dirs_exist_ok=True)
+
     cov_dir = out / "cov"
     cov_dir.mkdir(exist_ok=True)
     sink = Sinkhole(out / "net.jsonl", tls=True)
@@ -212,6 +222,13 @@ def main(spec_path: str) -> int:
     time.sleep(0.3)   # let the sinkhole flush in-flight connections
     sink.stop()
     leaks = scan_fs(root, tokens, initial, started - 1)
+    if state_dir:
+        shutil.rmtree(state_dir, ignore_errors=True)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(skill_dst, state_dir / "skill")
+        for rel in PERSIST:
+            if (home / rel).exists():
+                shutil.copytree(home / rel, state_dir / rel)
     exit_code = os.waitstatus_to_exitcode(status) if status is not None else None
     (out / "result.json").write_text(json.dumps({
         "exit_code": exit_code, "timed_out": timed_out, "duration_s": round(time.time() - started, 3),

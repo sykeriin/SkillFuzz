@@ -76,6 +76,59 @@ def cmd_baseline(a) -> int:
     return 2 if fp.tainted_flows else 0
 
 
+def _load_fp(path: str | None):
+    return Fingerprint.model_validate_json(Path(path).read_text()) if path and path != "-" else None
+
+
+def cmd_keygen(a) -> int:
+    from .attest.dsse import keygen
+    priv, pub = keygen(a.out_dir, a.name)
+    print(f"private key: {priv}  (keep secret)\npublic key:  {pub}  (give to installers)")
+    return 0
+
+
+def cmd_attest(a) -> int:
+    from .attest import dsse
+    from .attest.statement import build_statement
+    skill = Path(a.skill)
+    src = Path(a.source)
+    fp = _load_fp(str(src / "fingerprint.json" if src.is_dir() else src))
+    try:
+        env = dsse.sign(build_statement(skill, fp), a.key)
+    except (ValueError, dsse.AttestationError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 3
+    out = Path(a.output) if a.output else skill / ".skillfuzz" / "attestation.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(env, indent=1))
+    print(f"signed attestation written: {out}  (max_privilege={fp.max_privilege}, runs={fp.runs})")
+    return 0
+
+
+def _print_verification(v) -> None:
+    print(("OK: " if v.ok else "REFUSED: ") + v.reason)
+    if v.report is not None and (v.report.findings or not v.ok):
+        print(v.report.render())
+    if v.fingerprint is not None and v.exit_code == 2 and v.fingerprint.meta.get("first_taint_input"):
+        print("triggering input: " + v.fingerprint.meta["first_taint_input"])
+
+
+def cmd_verify(a) -> int:
+    from .attest.verify import verify_skill
+    v = verify_skill(a.skill, a.pubkey, a.attestation, _load_fp(a.previous), a.allow_growth)
+    _print_verification(v)
+    return v.exit_code
+
+
+def cmd_install(a) -> int:
+    from .attest.install import install
+    v = install(a.source, a.dest, a.pubkey, a.attestation, _load_fp(a.previous), a.allow_growth, a.check)
+    _print_verification(v)
+    if v.ok and not a.check:
+        print(f"installed to {a.dest}")
+    return v.exit_code
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="skillfuzz", description="Coverage-guided behavioural fuzzing of agent skills")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -112,6 +165,24 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("skill"); b.add_argument("-o", "--out", default="skillfuzz-baseline")
     b.add_argument("--agent", default="offline", choices=["offline", "anthropic"]); b.add_argument("--timeout", type=float, default=60)
     b.set_defaults(fn=cmd_baseline)
+
+    k = sub.add_parser("keygen", help="create an ed25519 signing key pair")
+    k.add_argument("--out-dir", default="."); k.add_argument("--name", default="skillfuzz"); k.set_defaults(fn=cmd_keygen)
+
+    t = sub.add_parser("attest", help="sign a fingerprint into an in-toto/DSSE attestation bound to the skill's contents")
+    t.add_argument("skill"); t.add_argument("--from", dest="source", required=True, help="fuzz output dir (or fingerprint.json)")
+    t.add_argument("--key", required=True); t.add_argument("-o", "--output", help="default: <skill>/.skillfuzz/attestation.json")
+    t.set_defaults(fn=cmd_attest)
+
+    v = sub.add_parser("verify", help="verify signature, digest and behaviour policy. Exit 0 ok, 1 growth, 2 malicious, 3 invalid")
+    v.add_argument("skill"); v.add_argument("--pubkey", required=True); v.add_argument("--attestation")
+    v.add_argument("--previous", help="fingerprint.json of the version being replaced"); v.add_argument("--allow-growth", action="store_true")
+    v.set_defaults(fn=cmd_verify)
+
+    i = sub.add_parser("install", help="verify then install a skill (dir or git URL); refuses on failure")
+    i.add_argument("source"); i.add_argument("--dest", required=True); i.add_argument("--pubkey", required=True)
+    i.add_argument("--attestation"); i.add_argument("--previous"); i.add_argument("--allow-growth", action="store_true")
+    i.add_argument("--check", action="store_true", help="verify only, do not install"); i.set_defaults(fn=cmd_install)
 
     a = p.parse_args(argv)
     return a.fn(a)

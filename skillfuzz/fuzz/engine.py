@@ -15,7 +15,10 @@ from ..recorder.normalize import build_trace
 from ..sandbox.namespace import NamespaceSandbox
 from . import seeds as seedmod
 from .mutators import Mutator
-from .static_pass import analyse
+from .static_pass import analyse, is_stateful
+
+
+STATEFUL_MIN_RUNS = 4          # a "3rd invocation" trigger needs at least 3 sequential runs; one spare
 
 
 @dataclass
@@ -65,18 +68,24 @@ class Fuzzer:
         self.rng = random.Random(self.cfg.seed)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._n = 0
+        self.stateful = is_stateful(self.skill_dir)
         self.llm_usage: dict[str, int] = {}
 
     # ---- one input -> one merged trace ---------------------------------------------------------------
     def run_input(self, fi: FuzzInput) -> EffectTrace:
         merged: EffectTrace | None = None
-        for rep in range(self.cfg.repeats):
+        reps = max(self.cfg.repeats, STATEFUL_MIN_RUNS) if self.stateful else self.cfg.repeats
+        state = (self.out_dir / "state" / fi.key()) if self.stateful else None
+        if state is not None:
+            shutil.rmtree(state, ignore_errors=True)       # every input starts from a clean slate; repeats share state
+        for rep in range(reps):
             self._n += 1
             rdir = self.out_dir / "runs" / f"{self._n:04d}"
             if rdir.exists():
                 shutil.rmtree(rdir)
             res = self.sandbox.run(self.skill_dir, fi, rdir, agent=self.cfg.agent, timeout=self.cfg.timeout,
-                                   seed=self.cfg.seed + self._n, **({"model_fn": self.cfg.model_fn} if self.cfg.model_fn else {}))
+                                   seed=self.cfg.seed + self._n, **({"model_fn": self.cfg.model_fn} if self.cfg.model_fn else {}),
+                                   **({"state_dir": state} if state is not None else {}))
             for k, v in (res.get("llm_usage") or {}).items():
                 self.llm_usage[k] = self.llm_usage.get(k, 0) + v
             tr = build_trace(rdir, fi, res["run_id"])
@@ -203,6 +212,7 @@ class Fuzzer:
         fp = build_fingerprint(self.skill_dir, traces, first_taint, len(global_cov),
                                meta={"label": label, "agent": cfg.agent, "seed": cfg.seed, "max_runs": cfg.max_runs,
                                      "plateau": cfg.plateau, "sandbox_seconds": round(sb_seconds, 1), "llm_usage": self.llm_usage,
+                                     "first_taint_input": records[first_taint - 1].fi.describe() if first_taint else None,
                                      "stop_reason": "taint" if (cfg.stop_on_taint and first_taint) else
                                      ("budget" if len(records) >= cfg.max_runs else "plateau")})
         result = FuzzResult(fp, records, traces, [c[0] for c in corpus], first_taint, sb_seconds)

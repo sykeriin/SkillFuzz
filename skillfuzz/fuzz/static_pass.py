@@ -136,3 +136,11 @@ def clock_candidates(date_str: str) -> list[str]:
     except ValueError:
         return []
     return [(d + dt.timedelta(days=1)).isoformat(), d.isoformat()]
+
+
+STATEFUL_RE = re.compile(r"(counter|\.count\b|run_count|invocation|times_run|launch_count|nth_run|usage_count)", re.I)
+
+
+def is_stateful(skill_dir: str | Path) -> bool:
+    """Heuristic: does the skill keep a counter/state between invocations? Only then do we pay for repeated runs."""
+    return any(STATEFUL_RE.search(t) for t in _read_texts(Path(skill_dir)))
