@@ -282,3 +282,62 @@ No real credentials anywhere; no egress from the sandbox; `.invalid` exfil domai
 
 ## 11. Extensions (not now)
 MCP servers and browser extensions as targets; GitHub Action that re-attests on PR; a public skill transparency log (Trillian/Rekor-style append-only fingerprints); eBPF recorder; Firecracker backend; LLM semantic coverage of SKILL.md.
+
+---
+
+# PHASE 2 (2026-11-03): finish the project, test at the end
+
+**Context.** The MVP (branch `skillfuzz-mvp` in `sykeriin/SkillFuzz`, 26 tests passing) covers sandbox, recorder, fuzzer, fingerprint, differ and a synthetic eval. User instruction: "keep building whatever is required, testing at the end always." What is still missing, in priority order:
+
+## A. Attestation + installer hook (component F, deferred from the MVP; this is what makes it a supply-chain tool)
+- `skillfuzz/attest/digest.py`: reuse `util.tree_digest` for the subject digest; add git commit lookup.
+- `attest/statement.py`: in-toto Statement v1, predicate type `https://skillfuzz.dev/attestation/behavior/v0.1`, predicate = `Fingerprint` + fuzz config + coverage + agent/model + tool version (reuse `models.Fingerprint`).
+- `attest/dsse.py` + `attest/sign.py`: DSSE envelope, ed25519 via `cryptography` (new dependency, optional extra `attest`); `skillfuzz keygen`; `--sigstore` keyless path only if `sigstore` is importable and an OIDC token exists (cannot be exercised in this container, so it will be documented as untested).
+- `attest/verify.py`: verify signature, check subject digest equals the current tree, optionally diff against a pinned previous fingerprint using `fingerprint/diff.py:diff`.
+- `attest/install.py` + CLI `skillfuzz attest | verify | install`: fetch (dir or git URL) → digest → verify → refuse undeclared growth unless `--allow-growth`; exit codes reuse `DiffReport.exit_code`.
+- `hooks/claude_code_pretooluse_skill_guard.sh`: sample hook that calls `skillfuzz install --check`.
+
+## B. Close the gaps the MVP README admits to
+1. **Stateful triggers** ("on the Nth run"): add an optional persistent-state mount across repeats of the same input (`FuzzInput.run_index`, tmpfs state dir carried between runs) and an `nth_invocation` dormant trigger.
+2. **Static scanner baseline** (SkillSieve-L1-like regex/AST rules) in `baselines/static_scanner.py`, added to `eval/run_eval.py`, so the table has the three baselines the brief names.
+3. **Ablation harness**: `eval/ablate.py` running the 4 configs x N seeds and printing mean and spread (the MVP ablation was n=12 by hand). Report whether coverage guidance matters, with seeds, not one run.
+4. **More benign skills** (target 10, brief says 10 base skills) so the false-positive check is not N=3; the dormant set scales to 10 x 13.
+5. **Sandbox-evasion check**: add 4 probe triggers (empty shell history, <N commits, low CPU count, hostname pattern) to the dormant generator and report which a "lived-in" home defeats. CPU/uptime probes are listed as known gaps if not fixable.
+6. **Plots**: `eval/plots.py` coverage-vs-runs curves and time-to-trigger CDF from `coverage_curve.csv` (matplotlib as optional extra).
+
+## C. Real-data readiness (needs the user)
+- `eval/real/README.md` + `eval/real/load_clawhub.py`: loader for the openclaw/skills snapshot and the snyk-labs/toxicskills-goof samples; benign-FPR run over a random sample of N skills. Will try fetching through the proxy; if blocked, ship the loader untested and say so.
+- A `--agent anthropic` smoke script (`eval/run_llm_smoke.sh`) for the user to run once `ANTHROPIC_API_KEY` is set. Not runnable here.
+
+## D. Repo hygiene
+- GitHub Actions workflow running `pytest` (sandbox tests marked, skipped when namespaces are unavailable) and a reusable "re-attest on PR" action (extension, last priority).
+- Update `README.md` limitations/results, `docs/PLAN.md`.
+
+## Explicit non-goals this phase
+Firecracker/gVisor backend, eBPF recorder, transparency log, MCP/browser-extension targets, running real malware.
+
+## Order and verification ("testing at the end")
+Build A → B1–B4 → B5–B6 → C → D, committing to `skillfuzz-mvp` after each block (push with retry). **Only after everything is built**, run in this order: (1) `pytest -q` (existing 26 + new unit tests for DSSE round-trip, tamper detection by flipping one byte in a skill file and in the envelope, wrong-key rejection, digest stability, install refusal/allow-growth exit codes, static-scanner rules, stateful trigger, ablation aggregation); (2) `skillfuzz check`; (3) full `eval/run_eval.py` over 10 benign bases (background, ~30+ min, jobs=3); (4) `eval/ablate.py` with 3 seeds; (5) end-to-end demo script: fuzz v1 → attest → install OK → swap in malicious v2 → install refuses with exit 2 and prints the triggering input. Report failures as they are; fix real bugs and re-run, and say what was tuned after seeing results.
+
+---
+
+## STATUS as of mid-build (worker restart checkpoint, still on branch `skillfuzz-mvp`, nothing committed since `7069f7a`)
+
+**Built and working (uncommitted on disk in `/home/user/skillfuzz`):**
+- Block A (attestation): `skillfuzz/attest/{dsse,statement,verify,install}.py`, CLI `keygen|attest|verify|install`, `hooks/claude_code_pretooluse_skill_guard.sh`. 16/17 new tests in `tests/test_attest.py` pass.
+- **One known failing test**: `test_install_from_git_url` — `attest/install.py:_fetch()` only recognizes `http(s)://`, `git@`, `ssh://`, `.git`-suffixed sources; it rejects `file://` URLs. Needs either a `file://` branch in `_fetch` (strip the scheme, treat as a local dir) or rewriting the test to use a real `git@`-style remote. Fix this first.
+- Block B1 (stateful triggers): `FuzzInput`-keyed state dir persisted across repeats in `sandbox/supervisor.py` + `sandbox/namespace.py` (`state_dir` param) + `fuzz/engine.py` (`STATEFUL_MIN_RUNS`, `is_stateful()` in `fuzz/static_pass.py`). `nth_invocation` dormant trigger added and verified end-to-end (fires on 3rd/4th run, 2/2 repeats tainted).
+- Block B2 (static scanner baseline): `skillfuzz/baselines/static_scanner.py`, wired into `eval/run_eval.py` as a third column. All 10 benign skills scan clean; a credential+network sample flags correctly.
+- Block B4 (more benign skills): 10 total now in `eval/skills/benign/` (added pr-describer, docker-cleanup, readme-badges, commit-lint, license-check, dep-audit, branch-cleanup).
+- Block B5 (evasion probes): 4 `evasion_*` triggers added to `eval/dormant/dormant_gen.py` (history length, git commit count, CPU count, hostname pattern) — these measure whether our own lived-in sandbox defeats each check; all 4 confirmed defeated end-to-end. (Note: an earlier attempt at this block went down an XOR-packed-payload/obfuscation-loader path to model SkillCloak-style packing; that was reverted mid-build as not something to build, even inert — do not reintroduce it. The evasion probes that replaced it are detection-only self-tests of sandbox realism, not packing/evasion tooling.)
+- Block B6 (ablation harness + plots): `eval/ablate.py` (seeded, multi-config, aggregates mean/median/spread) and `eval/plots.py` (coverage curve PNG, time-to-trigger CDF PNG; matplotlib optional extra `[plots]`). Both smoke-tested successfully on tiny budgets.
+- `pyproject.toml` extras updated: `attest = ["cryptography>=42"]`, `plots = ["matplotlib>=3.8"]`, `dev` now includes both.
+
+**Not yet done:**
+- Fix the one failing test, then run the **full** `pytest -q` (not just `test_attest.py`) to confirm nothing else regressed from the engine/supervisor/namespace changes.
+- Block C (real-data loader: `eval/real/load_clawhub.py` + README) — not started.
+- Block D (GitHub Actions workflow, README/docs/PLAN.md updates for everything built this phase) — not started.
+- Nothing from this phase has been committed or pushed yet — nothing new is on `origin/skillfuzz-mvp` beyond `7069f7a`.
+- The full verification sequence in "Order and verification" above (steps 2–5: `skillfuzz check`, full `run_eval.py` over 10 bases, `ablate.py` with 3 seeds, the attest→install→malicious-v2-refusal demo) has not been run yet.
+
+**Resume point:** fix `_fetch`'s `file://` handling in `skillfuzz/attest/install.py`, re-run `tests/test_attest.py`, then continue to the full test suite and the rest of block C/D per the order above.

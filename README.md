@@ -3,8 +3,8 @@
 Coverage-guided behavioural fuzzing for agent skills (SKILL.md + scripts), with a version-diff check that flags
 capability growth between releases.
 
-**Status: MVP.** The sandbox, recorder, fuzzer, fingerprint and differ work and are tested. Signing/attestation
-and the installer hook are designed (`docs/PLAN.md`) but **not built yet**. Read *Limitations* before trusting any number here.
+**Status.** Sandbox, recorder, fuzzer, fingerprint/differ, signing/attestation and the installer hook are all built
+and tested (43 tests). Read *Limitations* before trusting any number here.
 
 ## Why
 
@@ -50,6 +50,29 @@ file_writes = ["workspace"]
 tools = ["bash"]
 remote_instruction_fetch = false
 ```
+
+### Attestation and the installer hook
+
+```bash
+pip install -e '.[attest]'                                    # adds the `cryptography` dependency
+skillfuzz keygen --out-dir keys                                # keys/skillfuzz.{key,pub}; keep the .key secret
+
+skillfuzz fuzz path/to/skill -o out/v1
+skillfuzz attest path/to/skill --from out/v1 --key keys/skillfuzz.key   # writes <skill>/.skillfuzz/attestation.json
+
+# verify: exit 0 ok, 1 undeclared growth, 2 malicious, 3 invalid (bad signature / tampered contents / no attestation)
+skillfuzz verify path/to/skill --pubkey keys/skillfuzz.pub
+
+# install (dir or git URL) -> verify -> refuse on growth/taint unless --allow-growth; never writes on refusal
+skillfuzz install https://github.com/example/some-skill --dest ~/.claude/skills/some-skill --pubkey keys/skillfuzz.pub
+```
+
+The attestation binds a signed fingerprint to the exact contents of the skill tree (a sha256 of every file):
+editing the skill after attesting it makes verification fail with "skill contents do not match the attested
+digest", which is the mechanism that would have caught a scan-then-swap bait-and-switch. `hooks/claude_code_pretooluse_skill_guard.sh`
+is a sample Claude Code `PreToolUse` hook that blocks `gh skill install` / `npx skills add` / a raw `cp` into a
+skills directory when `skillfuzz install --check` refuses the source (pattern-matches the command line; **not yet
+tested against a live Claude Code session**).
 
 ## How it works
 
@@ -112,20 +135,37 @@ and 12 version pairs. "Flagged" = honeytoken exfiltration or a run-time instruct
   hardware/timing checks, statically linked binaries or raw syscalls that bypass the clock shim.
 * **Not a hardened boundary.** Namespaces + chroot, not a VM. See `SECURITY.md`. Do not run real malware here on a machine you care about.
 * HTTPS clients that pin certificates or ignore `SSL_CERT_FILE` are still recorded (DNS, SNI, connect, file reads) but their bodies are not readable.
-* No signing/attestation yet; `skillfuzz diff` already works as a CI gate (exit codes).
-* False positives on benign skills were checked on N=3 only. That is a smoke test, not an FPR.
+* **Sigstore keyless signing is designed but not implemented**: only local ed25519 keys work. Keyless needs an
+  interactive OIDC flow or a CI identity, neither available in the environment this was built in.
+* **The PreToolUse hook (`hooks/claude_code_pretooluse_skill_guard.sh`) pattern-matches a shell command line and has
+  never been run against a live Claude Code session.** An install done any other way is invisible to it.
+* **One real-world data point, not a detection claim.** `eval/real/` found a real disclosed malicious skill
+  (Snyk's ToxicSkills demo) that the static-scanner baseline misses when the payload has no credential-path string
+  in it. Running that sample through SkillFuzz's *own* dynamic pipeline — the actual test of this project's
+  thesis — was blocked by this session's own safety controls (no execution of unreviewed external code) and is
+  recorded as a follow-up in `eval/real/README.md`, not papered over.
+* The benign-skill false-positive check is now N=10 (was N=3), still nowhere near enough to state an FPR.
 
 ## Layout
 
 ```
-skillfuzz/sandbox/   namespace launcher, supervisor (runs in the namespaces), sinkhole, honeytokens, lived-in home, clock shim
-skillfuzz/recorder/  strace parser, normaliser, taint scanner
-skillfuzz/agents/    offline agent, anthropic agent, host-side model bridge
-skillfuzz/fuzz/      static pre-pass, seeds, mutators, engine
+skillfuzz/sandbox/      namespace launcher, supervisor (runs in the namespaces), sinkhole, honeytokens, lived-in home, clock shim
+skillfuzz/recorder/     strace parser, normaliser, taint scanner
+skillfuzz/agents/       offline agent, anthropic agent, host-side model bridge
+skillfuzz/fuzz/         static pre-pass, seeds, mutators, engine (cross-run state for "Nth invocation" skills)
 skillfuzz/fingerprint/  fingerprint builder, manifest, differ
-skillfuzz/baselines/ fixed single-task detonation
-eval/                benign base skills, dormant-variant generator (inert payloads), bait-and-switch pairs, run_eval.py
-docs/PLAN.md         full plan: scope, related work, design decisions and rejected alternatives, roadmap
+skillfuzz/attest/       DSSE signing, in-toto statement, verify, install (the installer hook)
+skillfuzz/baselines/    fixed single-task detonation, text-only static scanner
+eval/skills/benign/     10 base skills
+eval/dormant/           18-trigger-type generator (inert payloads): generic, needs-the-skill, stateful, 4 sandbox-evasion probes
+eval/bait_switch/       v1/v2 pairs (undeclared telemetry, declared/undeclared new binary, CI-gated exfiltration)
+eval/real/              loader for real (non-synthetic) skill sources; read-only, never executes what it fetches
+eval/run_eval.py        3-baseline comparison table + bait-switch verdicts
+eval/ablate.py          seeded, multi-config ablation (does coverage guidance help, across seeds?)
+eval/plots.py           coverage-vs-runs and time-to-trigger plots (optional matplotlib extra)
+hooks/                  sample Claude Code PreToolUse hook wrapping skill installs
+.github/workflows/      test.yml (CI); reattest.yml (template for re-attesting a skill repo's own skills on PR)
+docs/PLAN.md            full plan: scope, related work, design decisions and rejected alternatives, roadmap, build log
 ```
 
 ## Related work

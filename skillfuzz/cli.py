@@ -76,6 +76,16 @@ def cmd_baseline(a) -> int:
     return 2 if fp.tainted_flows else 0
 
 
+def cmd_scan(a) -> int:
+    from .baselines.static_scanner import scan
+    r = scan(a.skill)
+    print(f"{'FLAG' if r.flagged else 'clean'}  score={r.score}  reason={r.reason or '-'}")
+    for cat, hits in r.hits.items():
+        for h in hits:
+            print(f"  {cat}: {h}")
+    return 2 if r.flagged else 0
+
+
 def _load_fp(path: str | None):
     return Fingerprint.model_validate_json(Path(path).read_text()) if path and path != "-" else None
 
@@ -165,6 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("skill"); b.add_argument("-o", "--out", default="skillfuzz-baseline")
     b.add_argument("--agent", default="offline", choices=["offline", "anthropic"]); b.add_argument("--timeout", type=float, default=60)
     b.set_defaults(fn=cmd_baseline)
+
+    sc = sub.add_parser("scan", help="text-only static-scanner baseline (regex/heuristic triage, no execution)")
+    sc.add_argument("skill"); sc.set_defaults(fn=cmd_scan)
 
     k = sub.add_parser("keygen", help="create an ed25519 signing key pair")
     k.add_argument("--out-dir", default="."); k.add_argument("--name", default="skillfuzz"); k.set_defaults(fn=cmd_keygen)

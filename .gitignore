@@ -8,3 +8,5 @@ skillfuzz-baseline/
 *.pyc
 .venv/
 eval/real/_cache/
+eval/skills/benign/*/.skillfuzz/
+**/.skillfuzz/

@@ -1,0 +1,34 @@
+name: re-attest skill on PR
+
+# Extension / template, not wired to publish anywhere by default. A repo that ships agent skills can copy this to
+# re-fuzz any changed skill directory on every PR and fail the check on undeclared capability growth or a tainted
+# (honeytoken-exfiltrating) flow. Point SKILL_DIRS at the skill(s) this repo actually contains.
+on:
+  pull_request:
+    paths:
+      - "skills/**"
+
+jobs:
+  reattest:
+    runs-on: ubuntu-latest
+    env:
+      SKILL_DIRS: skills/*     # edit for your repo layout
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install SkillFuzz
+        run: pip install 'skillfuzz[attest] @ git+https://github.com/sykeriin/skillfuzz@skillfuzz-mvp'
+      - name: Fuzz base and head, then diff
+        run: |
+          set -e
+          for d in $SKILL_DIRS; do
+            name=$(basename "$d")
+            git worktree add /tmp/base "${{ github.event.pull_request.base.sha }}" -q
+            skillfuzz fuzz "/tmp/base/$d" -o "/tmp/out-base-$name" --max-runs 40 || true
+            skillfuzz fuzz "$d" -o "/tmp/out-head-$name" --max-runs 40 --replay "/tmp/out-base-$name"
+            skillfuzz diff "/tmp/out-base-$name/fingerprint.json" "/tmp/out-head-$name/fingerprint.json" --manifest "$d"
+          done

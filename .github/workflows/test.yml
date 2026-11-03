@@ -1,0 +1,24 @@
+name: test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: sudo apt-get update -q && sudo apt-get install -y -q strace
+      - name: Install
+        run: pip install -e '.[dev]'
+      - name: Check sandbox availability
+        run: skillfuzz check || echo "::warning::namespace sandbox unavailable on this runner; sandbox-marked tests will skip"
+      - name: Run tests
+        run: python -m pytest -q
