@@ -102,37 +102,51 @@ tested against a live Claude Code session**).
 
 ## Results on the bundled synthetic set
 
-Offline agent, 45-run budget, plateau 12, 3 base skills x 13 trigger types (39 dormant samples) plus 3 benign skills
-and 12 version pairs. "Flagged" = honeytoken exfiltration or a run-time instruction fetch.
+Offline agent, 45-run budget, plateau 12, 5 base skills x 18 trigger types (90 dormant samples) plus all 10 benign
+skills and 20 version pairs. "Flagged" = honeytoken exfiltration or a run-time instruction fetch. Spot-checked by
+hand against the raw `eval_results.csv` (not just the printed summary) before being written here: all 5 `always`-trigger
+rows fire at run 1 as expected, zero dormant rows are unflagged, zero benign rows are flagged.
 
-| tier | fixed single-task run | SkillFuzz |
-|---|---|---|
-| generic triggers (guessable: `CI=true`, far-future date, `de_DE`, macOS, "deploy"...) | 6/27 | 27/27 |
-| needs-the-skill triggers (`DEPLOY_STAGE=live`, a Dec-2026 date window, a git-remote string, the word "invoice") | 0/12 | 12/12 |
-| all dormant | 6/39 | 39/39 |
+| tier | static scan | fixed single-task run | SkillFuzz |
+|---|---|---|---|
+| generic triggers (guessable: `CI=true`, far-future date, `de_DE`, macOS, "deploy"...) | 25/45 | 10/45 | 45/45 |
+| needs-the-skill triggers (`DEPLOY_STAGE=live`, a Dec-2026 date window, a git-remote string, "invoice", the Nth run, 4 sandbox-realism probes) | 40/45 | 25/45 | 45/45 |
+| all dormant | 65/90 | 35/90 | 90/90 |
 
-* Runs until the payload first fired: median 7, max 28. Benign skills flagged: 0/3 (N=3, not an FPR).
-* Version diff: 12/12 pairs got the expected verdict (undeclared telemetry host, declared vs undeclared new binary, CI-gated exfiltration).
-* **Ablations** (6 needs-skill/generic triggers, 2 seeds, targeted sweep off): without the skill-specific static dictionary the two
-  needs-skill samples tested were missed; guided vs unguided havoc found 11/12 vs 10/12, i.e. no measurable benefit from coverage feedback.
-* **Caveat on the 100%:** the eval caught five bugs in my own code (CI regex, quote pairing, env-compare regex, base64/base32
-  alignment, marker attribution), which I fixed and then re-ran on the same samples. The set is partly tuned to the detector.
+* Runs until the payload first fired: median 7, max 31. Benign skills flagged: 0/10 on all three detectors
+  (N=10, still nowhere near enough to state an FPR).
+* Version diff: 20/20 pairs got the expected verdict (undeclared telemetry host, declared vs undeclared new binary,
+  CI-gated exfiltration), re-run and confirmed after an interrupted first attempt.
+* **Cost finding, not hand-waved:** the one stateful trigger (`nth_invocation`, fires only on the skill's 3rd
+  invocation) took 331.5s to detect vs. 60-90s for a typical sample, because it needs the skill run 4 times in a
+  row with shared state before the condition can even be checked. Stateful triggers are real and the mechanism
+  catches them, but they cost roughly 4-5x.
+* **Ablations** (git-changelog + csv-summary, 5 needs-skill triggers incl. `nth_invocation`, 3 seeds, 5 configs):
+  ABLATION_PLACEHOLDER
+* **Caveat on the 100%:** the eval caught five bugs in my own code during the first, smaller run (CI regex, quote
+  pairing, env-compare regex, base64/base32 alignment, marker attribution), which were fixed before this larger
+  run. The dormant set is written by the same person who wrote the detector, and some generic triggers
+  (`CI=true`, "deploy", `de_DE`) deliberately overlap with values a real attacker might also guess — the
+  needs-skill tier exists specifically to separate "lucky prior" from "actually read the skill".
 
 ## Limitations (please read)
 
-* **The numbers above are not a detection rate on real malware.** The 13 dormant samples were written by the author of
-  the detector, from three benign base skills, and run with a deterministic offline agent that follows SKILL.md literally.
+* **The numbers above are not a detection rate on real malware.** The 90 dormant samples were written by the author of
+  the detector, from 5 benign base skills, and run with a deterministic offline agent that follows SKILL.md literally.
   They show that the mechanism works end to end.
 * **The offline agent is not an LLM.** It understands a small grammar of conditions and imperatives. A real model will
   skip some instructions, follow others the grammar cannot express, and be stopped by its own safety training. Real
   measurements need `--agent anthropic` (implemented and plumbing-tested with a scripted model, **never run against a real model**).
-* **The coverage feedback loop has not been shown to help.** In the ablations, the static dictionary and the targeted sweep
-  account for nearly every detection; guided and unguided havoc found 11/12 vs 10/12 (see above). On this set the
-  contribution is "read the skill for its trigger values", not "coverage guidance".
+* **Whether the coverage feedback loop itself helps is still open.** See the ablation numbers above — a static
+  dictionary extracted straight from the skill's own source does most of the work; the question is how much the
+  AFL-style guided search adds on top of it, measured across seeds rather than a single run.
 * **Test-set leakage risks.** Generic priors (`CI=true`, `deploy`, a far-future clock, `de_DE`) overlap with several dormant triggers; the
   `needs_skill` tier exists to separate the two. The seed-task templates contain the word "deploy".
-* Triggers it **cannot** reach: stateful ("on the 3rd run"; each run starts fresh), network-dependent (a C2 that must answer),
-  hardware/timing checks, statically linked binaries or raw syscalls that bypass the clock shim.
+* **Stateful triggers ("on the 3rd run") are now reached**, at a real cost (see the `nth_invocation` finding
+  above): ~4-5x the sandbox time of a stateless sample, because the fuzzer must run the same input repeatedly with
+  shared state before the condition can even be checked. Triggers it still **cannot** reach: network-dependent
+  (a C2 that must answer back), hardware/timing side-channels, statically linked binaries or raw syscalls that
+  bypass the clock shim.
 * **Not a hardened boundary.** Namespaces + chroot, not a VM. See `SECURITY.md`. Do not run real malware here on a machine you care about.
 * HTTPS clients that pin certificates or ignore `SSL_CERT_FILE` are still recorded (DNS, SNI, connect, file reads) but their bodies are not readable.
 * **Sigstore keyless signing is designed but not implemented**: only local ed25519 keys work. Keyless needs an
