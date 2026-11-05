@@ -151,3 +151,12 @@ def test_sinkhole_certs_pass_strict_verification():
     pem = leaf_cert("strict-check.skillfuzz.invalid")
     r = subprocess.run(["openssl", "verify", "-x509_strict", "-CAfile", str(ca), str(pem)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr + r.stdout
+
+
+def test_supervisor_copytree_never_follows_symlinks():
+    """The supervisor runs on the host; following a skill-planted symlink would copy host files into sandbox state."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "skillfuzz/sandbox/supervisor.py").read_text()
+    calls = re.findall(r"shutil\.copytree\(.*", src)
+    assert calls and all("symlinks=True" in c for c in calls)
