@@ -26,6 +26,7 @@ from pathlib import Path
 from skillfuzz.models import FuzzInput
 from skillfuzz.sandbox.faketime import offset_seconds, shim_path
 from skillfuzz.sandbox.home import build_home
+from skillfuzz.sandbox.safecopy import safe_copy
 from skillfuzz.sandbox.honeytokens import Honeytokens
 from skillfuzz.sandbox.sinkhole import Sinkhole, ensure_ca
 
@@ -150,17 +151,17 @@ def main(spec_path: str) -> int:
     home = root / "home/agent"
     initial = set(build_home(home, tokens, fi, seed=int(spec.get("seed", 0))))
     skill_dst = home / ".claude/skills" / skill_name
-    shutil.copytree(skill_dir, skill_dst, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__", ".skillfuzz"))
+    safe_copy(Path(skill_dir).resolve(), skill_dst, Path(skill_dir).resolve(), ignore=(".git", "__pycache__", ".skillfuzz"))
     initial |= {str(p.relative_to(home)) for p in skill_dst.rglob("*") if p.is_file()}
 
     # Optional cross-run state (for "fires on the Nth invocation" skills): only the skill's own directory, ~/.cache and
     # ~/.local persist. Credentials never do, so markers from an earlier run cannot leak into this one.
     state_dir = Path(spec["state_dir"]) if spec.get("state_dir") else None
     if state_dir and (state_dir / "skill").exists():
-        shutil.copytree(state_dir / "skill", skill_dst, symlinks=True, dirs_exist_ok=True)
+        safe_copy(state_dir / "skill", skill_dst, state_dir)
         for rel in PERSIST:
             if (state_dir / rel).exists():
-                shutil.copytree(state_dir / rel, home / rel, symlinks=True, dirs_exist_ok=True)
+                safe_copy(state_dir / rel, home / rel, state_dir)
 
     cov_dir = out / "cov"
     cov_dir.mkdir(exist_ok=True)
@@ -225,10 +226,10 @@ def main(spec_path: str) -> int:
     if state_dir:
         shutil.rmtree(state_dir, ignore_errors=True)
         state_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(skill_dst, state_dir / "skill", symlinks=True)
+        safe_copy(skill_dst, state_dir / "skill", root)
         for rel in PERSIST:
             if (home / rel).exists():
-                shutil.copytree(home / rel, state_dir / rel, symlinks=True)
+                safe_copy(home / rel, state_dir / rel, root)
     exit_code = os.waitstatus_to_exitcode(status) if status is not None else None
     (out / "result.json").write_text(json.dumps({
         "exit_code": exit_code, "timed_out": timed_out, "duration_s": round(time.time() - started, 3),

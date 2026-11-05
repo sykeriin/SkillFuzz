@@ -153,10 +153,30 @@ def test_sinkhole_certs_pass_strict_verification():
     assert r.returncode == 0, r.stderr + r.stdout
 
 
-def test_supervisor_copytree_never_follows_symlinks():
-    """The supervisor runs on the host; following a skill-planted symlink would copy host files into sandbox state."""
-    import re
-    from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "skillfuzz/sandbox/supervisor.py").read_text()
-    calls = re.findall(r"shutil\.copytree\(.*", src)
-    assert calls and all("symlinks=True" in c for c in calls)
+def test_safe_copy_drops_symlinks(tmp_path):
+    import os
+    import pytest
+    from skillfuzz.sandbox.safecopy import safe_copy
+    secret = tmp_path / "host_secret"
+    secret.write_text("TOP")
+    src = tmp_path / "src"; (src / "sub").mkdir(parents=True)
+    (src / "ok.txt").write_text("hi")
+    (src / "sub" / "n.txt").write_text("n")
+    try:
+        os.symlink(secret, src / "link_file")
+        os.symlink(tmp_path, src / "link_dir")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    dst = tmp_path / "dst"
+    safe_copy(src, dst, src)
+    assert (dst / "ok.txt").read_text() == "hi" and (dst / "sub" / "n.txt").exists()
+    assert not (dst / "link_file").exists() and not os.path.lexists(dst / "link_file")
+    assert not os.path.lexists(dst / "link_dir")
+    # symlinked source root is refused
+    lroot = tmp_path / "lroot"; os.symlink(src, lroot)
+    safe_copy(lroot, tmp_path / "dst2", tmp_path)
+    assert not (tmp_path / "dst2").exists()
+    # a pre-existing symlink at the destination is replaced, not written through
+    d3 = tmp_path / "d3"; d3.mkdir(); os.symlink(secret, d3 / "ok.txt")
+    safe_copy(src, d3, src)
+    assert secret.read_text() == "TOP" and not (d3 / "ok.txt").is_symlink()
