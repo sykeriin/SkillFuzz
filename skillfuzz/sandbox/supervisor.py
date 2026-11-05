@@ -13,6 +13,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -67,16 +68,35 @@ def bind(src: str | Path, dst: Path, ro: bool = True) -> None:
         # must succeed: a writable bind of /usr would let a skill modify the host
         for t in targets:
             sh("mount", "-o", "remount,bind,ro,nosuid,nodev", t)
+        _require_all_ro(dst)
+
+
+def _unescape(s: str) -> str:
+    return re.sub(r"\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+
+
+def _mount_table(dst: Path) -> dict[str, set[str]]:
+    """Mounts at or under dst, mapped to their per-mount options. Paths are canonical and octal-unescaped."""
+    prefix = os.path.realpath(dst)
+    found: dict[str, set[str]] = {}
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        f = line.split()
+        mp = _unescape(f[4])
+        if mp == prefix or mp.startswith(prefix + "/"):
+            found[mp] = set(f[5].split(","))
+    if prefix not in found:
+        raise RuntimeError(f"bind target {prefix} not found in mountinfo; refusing to continue")
+    return found
 
 
 def _mounts_under(dst: Path) -> list[str]:
-    prefix = str(dst)
-    found = []
-    for line in Path("/proc/self/mountinfo").read_text().splitlines():
-        mp = line.split()[4].replace("\040", " ")
-        if mp == prefix or mp.startswith(prefix + "/"):
-            found.append(mp)
-    return sorted(set(found), key=len)
+    return sorted(_mount_table(dst), key=len)
+
+
+def _require_all_ro(dst: Path) -> None:
+    bad = [m for m, o in _mount_table(dst).items() if "ro" not in o]
+    if bad:
+        raise RuntimeError(f"mounts left writable under {dst}: {bad}")
 
 
 def build_root(root: Path, out: Path, ca_pem: Path, shim: Path, use_shim: bool) -> None:
