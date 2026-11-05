@@ -55,10 +55,28 @@ def bind(src: str | Path, dst: Path, ro: bool = True) -> None:
     else:
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.touch()
-    sh("mount", "--bind", str(src), str(dst))
+    try:
+        sh("mount", "--bind", str(src), str(dst))
+        targets = [str(dst)]
+    except RuntimeError:
+        # A plain bind of a tree that has submounts (e.g. WSL2's /usr/lib/modules) is refused in a user namespace
+        # (the kernel treats it as revealing hidden mounts). Fall back to a recursive bind and lock every submount too.
+        sh("mount", "--rbind", str(src), str(dst))
+        targets = _mounts_under(dst)
     if ro:
         # must succeed: a writable bind of /usr would let a skill modify the host
-        sh("mount", "-o", "remount,bind,ro,nosuid,nodev", str(dst))
+        for t in targets:
+            sh("mount", "-o", "remount,bind,ro,nosuid,nodev", t)
+
+
+def _mounts_under(dst: Path) -> list[str]:
+    prefix = str(dst)
+    found = []
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        mp = line.split()[4].replace("\040", " ")
+        if mp == prefix or mp.startswith(prefix + "/"):
+            found.append(mp)
+    return sorted(set(found), key=len)
 
 
 def build_root(root: Path, out: Path, ca_pem: Path, shim: Path, use_shim: bool) -> None:
