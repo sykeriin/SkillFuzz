@@ -72,7 +72,7 @@ def bind(src: str | Path, dst: Path, ro: bool = True) -> None:
 
 
 def _unescape(s: str) -> str:
-    return re.sub(r"\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
 
 
 def _mount_table(dst: Path) -> dict[str, set[str]]:
