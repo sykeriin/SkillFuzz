@@ -1,17 +1,25 @@
 # SkillFuzz
 
-Coverage-guided behavioural fuzzing for agent skills (SKILL.md + scripts), with a version-diff check that flags
-capability growth between releases.
+A sandbox that forces an agent skill (SKILL.md + scripts) to run under many tasks and environment conditions until
+dormant, conditionally-triggered behaviour fires, records what it did, and diffs that against the previous version
+to flag undeclared capability growth. Dynamic analysis + a condition-extracting search, not a static scanner.
 
 **Status.** Sandbox, recorder, fuzzer, fingerprint/differ, signing/attestation and the installer hook are all built
-and tested (43 tests). Read *Limitations* before trusting any number here.
+and tested (44 tests). Read *Limitations*, especially the ablation finding below, before trusting any claim here —
+including the one in this project's own name: on the evaluation run so far, **the coverage-guided search itself
+added no measured benefit over plain random mutation** (see *Results*). What demonstrably works is dynamic
+execution plus extracting literal trigger values straight out of the skill's own source.
 
 ## Why
 
 Agent-skill marketplaces are a live malware channel. Static scanners are bypassable, and the dynamic analysers
 published so far run a skill once, so behaviour gated on a condition (a date, `CI=true`, a corporate git remote,
 a word in the task) never fires. Marketplaces also track moving branches, so a skill audited once can change later.
-SkillFuzz tries to make dormant behaviour fire, records what the skill did, and diffs that against the previous version.
+SkillFuzz runs a skill many times under different (task, environment) inputs until the condition is met, records
+what it did, and diffs that against the previous version. The inputs are chosen partly by extracting the literal
+values a skill's own conditions check (an env var name, a date, a keyword) and partly by mutation; whether the
+mutation needs to be *coverage-guided* rather than just *varied* is the open question this project set out to
+answer, and the first real measurement of it (below) says no, not on this evaluation.
 
 ## Quick start
 
@@ -121,8 +129,25 @@ rows fire at run 1 as expected, zero dormant rows are unflagged, zero benign row
   invocation) took 331.5s to detect vs. 60-90s for a typical sample, because it needs the skill run 4 times in a
   row with shared state before the condition can even be checked. Stateful triggers are real and the mechanism
   catches them, but they cost roughly 4-5x.
-* **Ablations** (git-changelog + csv-summary, 5 needs-skill triggers incl. `nth_invocation`, 3 seeds, 5 configs):
-  ABLATION_PLACEHOLDER
+* **Ablations — the headline finding of this whole evaluation** (git-changelog + csv-summary, 5 needs-skill
+  triggers incl. `nth_invocation`, 3 seeds, 5 configs, 150 runs, `eval/ablate.py`):
+
+  | config | detected | mean runs-to-trigger | spread |
+  |---|---|---|---|
+  | full (everything on) | 30/30 (100%) | 8.6 | 1-16 |
+  | no static dictionary | 6/30 (20%) | 1.0 | 1-1 |
+  | no targeted sweep (dictionary kept, only used by havoc) | 24/30 (80%) | 13.0 | 1-32 |
+  | unguided (no coverage feedback at all) | 30/30 (100%) | 8.6 | 1-16 |
+  | effect-triples only (no script branch coverage) | 30/30 (100%) | 8.6 | 1-16 |
+
+  Without the static dictionary, **every needs-skill trigger except the stateful one was missed in all 24 runs**
+  (the 6/30 that did hit is entirely `nth_invocation`, which doesn't depend on an extracted literal). Dropping only
+  the deterministic targeted sweep (keeping the dictionary for havoc to draw from) still finds 80%, but costs
+  ~50% more runs when it does. **`unguided` and `effect_only` are statistically identical to `full`** — same
+  detection rate, same mean (8.6), same median, same spread. On this evaluation, AFL-style coverage guidance and
+  the richer branch-coverage signal added no measurable benefit over picking mutations uniformly at random, once
+  the skill-specific dictionary is present. The detector's power here comes from extracting literal trigger values
+  out of the skill's own source and trying them, not from guided search.
 * **Caveat on the 100%:** the eval caught five bugs in my own code during the first, smaller run (CI regex, quote
   pairing, env-compare regex, base64/base32 alignment, marker attribution), which were fixed before this larger
   run. The dormant set is written by the same person who wrote the detector, and some generic triggers
@@ -137,9 +162,12 @@ rows fire at run 1 as expected, zero dormant rows are unflagged, zero benign row
 * **The offline agent is not an LLM.** It understands a small grammar of conditions and imperatives. A real model will
   skip some instructions, follow others the grammar cannot express, and be stopped by its own safety training. Real
   measurements need `--agent anthropic` (implemented and plumbing-tested with a scripted model, **never run against a real model**).
-* **Whether the coverage feedback loop itself helps is still open.** See the ablation numbers above — a static
-  dictionary extracted straight from the skill's own source does most of the work; the question is how much the
-  AFL-style guided search adds on top of it, measured across seeds rather than a single run.
+* **Coverage-guided search showed no measured benefit on this evaluation** (see the ablation table above, 3 seeds,
+  150 runs): `unguided` and `effect_only` are statistically identical to `full`. This could be specific to the
+  evaluation set — every needs-skill trigger here is a literal value the static pass can extract directly, so there
+  is no gradient for coverage feedback to climb. It is untested whether guidance would matter on a trigger that is
+  purely semantic (an NL condition requiring reasoning an LLM agent would need to do, with no literal in the
+  source) — that needs `--agent anthropic` run for real, which has not happened in this session.
 * **Test-set leakage risks.** Generic priors (`CI=true`, `deploy`, a far-future clock, `de_DE`) overlap with several dormant triggers; the
   `needs_skill` tier exists to separate the two. The seed-task templates contain the word "deploy".
 * **Stateful triggers ("on the 3rd run") are now reached**, at a real cost (see the `nth_invocation` finding
